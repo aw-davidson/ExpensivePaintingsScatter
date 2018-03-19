@@ -1,0 +1,652 @@
+<!DOCTYPE html>
+<meta charset="utf-8">
+<style>
+  svg {
+    font: 10px sans-serif;
+    margin-left: 92px;
+  }
+  .button-group {
+    display: flex;
+    flex-direction: row;
+  }
+
+  .x.axis .domain {
+    fill: none;
+    stroke: #000;
+    shape-rendering: crispEdges;
+  }
+
+  button {
+    display: block;
+    margin: 5px auto;
+    width: 200px;
+    font-size: 20px;
+    background-color: #00709b;
+    color: #fff;
+    border: 1px;
+    outline: none;
+  }
+
+  .d3-tip {
+    line-height: 1;
+    font-weight: bold;
+    padding: 12px;
+    background: rgba(0, 0, 0, 0.8);
+    color: rgb(249, 252, 255);
+    border-radius: 2px;
+  }
+
+
+  /* Creates a small triangle extender for the tooltip */
+
+  .d3-tip:after {
+    box-sizing: border-box;
+    display: inline;
+    font-size: 10px;
+    width: 100%;
+    line-height: 1;
+    color: rgba(0, 0, 0, 0.8);
+    content: "\25BC";
+    position: absolute;
+    text-align: center;
+  }
+
+  /* Style northward tooltips differently */
+
+  .d3-tip.n:after {
+    margin: -1px 0 0 0;
+    top: 100%;
+    left: 0;
+  }
+</style>
+
+<body>
+  <script src="http://d3js.org/d3.v3.min.js"></script>
+  <script src="http://labratrevenge.com/d3-tip/javascripts/d3.tip.v0.6.3.js"></script>
+  <link href="style.css" rel="stylesheet">
+  <script>
+
+
+    var margin = { top: 50, right: 50, bottom: 50, left: 50 },
+      width = 960 - margin.left - margin.right,
+      height = 500 - margin.top - margin.bottom,
+      // padding between nodes
+      padding = 2,
+      maxRadius = 1000,
+      numberOfNodes = 50;
+
+    // import data
+    var data =
+      d3.csv("expensive-paintings-dataset.csv", function (err, data) {
+        if (err) {
+          return console.error(err)
+        }
+        var prices = data.map(datum => {
+          return datum.value
+        })
+        console.log(data)
+        generate(data, prices)
+      });
+
+    function generate(dataset, prices) {
+
+      //x scale
+      let x = d3.scale.linear()
+        .domain([55300000, 223000000])
+        .range([margin.left, width + margin.right]);
+
+      //area scale
+      let a_scale = d3.scale.sqrt()
+        .domain([35200000, 259000000])
+        .range([15, 60]);
+
+      // Map the basic node dataset to d3-friendly format.
+      var nodes = dataset.map(function (node, index) {
+        console.log("original price: ", node.originalPrice)
+        return {
+          idealradius: a_scale(node.originalPrice),
+          radius: 0,
+          // Give each node a random color.
+          color: '#ff7f0e',
+          // Set the node's gravitational centerpoint.
+          idealcx: x(+node.value),
+          idealcy: height / 2,
+          x: x(+node.value),
+          // Add some randomization to the placement;
+          // nodes stacked on the same point can produce NaN errors.
+          y: height / 2 + Math.random(),
+          image: node.image,
+          painting: node.painting,
+          id: node.id,
+          adjustedPrice: node.adjustedPrice,
+          artist: node.artist,
+          yearOfPainting: node.yearOfPainting,
+          rankAtSale: node.rankAtSale
+        };
+      });
+
+      var force = d3.layout.force()
+        .nodes(nodes)
+        .size([width, height])
+        .gravity(0)
+        .charge(0)
+        .on("tick", tick)
+        .start();
+
+      var xAxis = d3.svg.axis()
+        .scale(x)
+
+
+      var svg = d3.select("body").append("svg")
+        .attr("width", width + margin.left + margin.right)
+        .attr("height", height + margin.top + margin.bottom);
+
+      var loading = svg.append("text")
+        .attr("x", (width + margin.left + margin.right) / 2)
+        .attr("y", (height + margin.top + margin.bottom) / 2)
+        .attr("dy", ".35em")
+        .style("text-anchor", "middle")
+        .text("Simulating. One moment please…");
+
+      /**
+       * On a tick, apply custom gravity, collision detection, and node placement.
+       */
+      function tick(e) {
+        for (i = 0; i < nodes.length; i++) {
+          var node = nodes[i];
+          /*
+           * Animate the radius via the tick.
+           *
+           * Typically this would be performed as a transition on the SVG element itself,
+           * but since this is a static force layout, we must perform it on the node.
+           */
+          node.radius = node.idealradius - node.idealradius * e.alpha * 10;
+          node = gravity(.2 * e.alpha)(node);
+          node = collide(.5)(node);
+          node.cx = node.x;
+          node.cy = node.y;
+        }
+      }
+
+      /**
+       * On a tick, move the node towards its desired position,
+       * with a preference for accuracy of the node's x-axis placement
+       * over smoothness of the clustering, which would produce inaccurate dataset presentation.
+       */
+      function gravity(alpha) {
+        return function (d) {
+          d.y += (d.idealcy - d.y) * alpha;
+          d.x += (d.idealcx - d.x) * alpha * 3;
+          return d;
+        };
+      }
+
+      /**
+       * On a tick, resolve collisions between nodes.
+       */
+      function collide(alpha) {
+        var quadtree = d3.geom.quadtree(nodes);
+        return function (d) {
+          var r = d.radius + maxRadius + padding,
+            nx1 = d.x - r,
+            nx2 = d.x + r,
+            ny1 = d.y - r,
+            ny2 = d.y + r;
+          quadtree.visit(function (quad, x1, y1, x2, y2) {
+            if (quad.point && (quad.point !== d)) {
+              var x = d.x - quad.point.x,
+                y = d.y - quad.point.y,
+                l = Math.sqrt(x * x + y * y),
+                r = d.radius + quad.point.radius + padding;
+              if (l < r) {
+                l = (l - r) / l * alpha;
+                d.x -= x *= l;
+                d.y -= y *= l;
+                quad.point.x += x;
+                quad.point.y += y;
+              }
+            }
+            return x1 > nx2 || x2 < nx1 || y1 > ny2 || y2 < ny1;
+          });
+          return d;
+        };
+      }
+
+      /**
+       * Run the force layout to compute where each node should be placed,
+       * then replace the loading text with the graph.
+       */
+      function renderGraph() {
+        // Run the layout a fixed number of times.
+        // The ideal number of times scales with graph complexity.
+        // Of course, don't run too long—you'll hang the page!
+        force.start();
+        for (var i = 100; i > 0; --i) force.tick();
+        force.stop();
+
+        //Create x axis
+        svg.append("g")
+          .attr("class", "x axis")
+          .attr("transform", "translate(0," + (margin.top + (height * 3 / 4)) + ")")
+          .call(xAxis);
+
+        //defs
+        let defs = svg.append("defs")
+
+
+        defs.selectAll(".artist-pattern")
+          .data(nodes)
+          .enter().append('pattern')
+          .attr("class", "artist-pattern")
+          .attr("id", (d) => {
+            return d.id
+          })
+          .attr("height", "100%")
+          .attr("width", "100%")
+          .attr("patternContentUnits", "objectBoundingBox")
+          .append("image")
+          .attr("height", "1")
+          .attr("width", "1")
+          .attr("preserveAspectRatio", "none")
+          .attr("xmlns:xlink", "")
+          .attr("xmlns:xlink", "")
+          .attr("xlink:href", (d) => {
+            return d.image
+          })
+
+        //tooltip
+        var tip = d3.tip()
+          .attr('class', 'd3-tip')
+          .offset([-10, 0])
+          .html(function (d) {
+            return `<span style='color:"f7f7f7"'> ${d.painting} </span>
+            <p style='color:"rgb(141, 141, 141)"'>by ${d.artist} </p>
+                    <p style='color:"rgb(141, 141, 141)"'>${d.adjustedPrice} </p>
+                    <img src=${d.image} height="100px">
+              `;
+          })
+
+        svg.call(tip);
+
+
+        //circles
+        var circle = svg.selectAll("circle")
+          .data(nodes)
+          .enter()
+          .append("circle")
+          .style("fill", function (d) { return `url(#${d.id})`; })
+          .attr("cx", function (d) { return d.x })
+          .attr("cy", function (d) { return d.y })
+          .attr("r", function (d) { return d.radius })
+          .attr("opacity", "1")
+          .on('mouseover', tip.show)
+          .on('mouseout', tip.hide)
+
+        let newData = [{ id: 3223, originalPrice: 259000000, value: 273000000, adjustedPrice: `$273,000,000`, image: "http://upload.wikimedia.org/wikipedia/commons/thumb/5/58/Card_Players-Paul_Cezanne.jpg/95px-Card_Players-Paul_Cezanne.jpg", painting: "The Card Players", artist: "Paul Cezanne" }, { id: 323, originalPrice: 300000000, value: 304000000, adjustedPrice: `$304,000,000`, image: "https://upload.wikimedia.org/wikipedia/en/5/5f/Photo_of_Interchanged_by_Willem_de_Kooning.jpg", painting: "interchange", artist: "Willem De Kooning" }, { id: 123, originalPrice: 450000000, value: 454000000, adjustedPrice: `$454,000,000`, image: "https://upload.wikimedia.org/wikipedia/commons/thumb/5/5c/Leonardo_da_Vinci%2C_Salvator_Mundi%2C_c.1500%2C_oil_on_walnut%2C_45.4_%C3%97_65.6_cm.jpg/440px-Leonardo_da_Vinci%2C_Salvator_Mundi%2C_c.1500%2C_oil_on_walnut%2C_45.4_%C3%97_65.6_cm.jpg", painting: "Salvator Mundi", artist: "Leonardo DaVinci" }]
+
+
+        d3.select(".add").on("click", () => {
+          //add new data
+          newDatum = newData.shift()
+          dataset.push(newDatum)
+
+          //update scales
+          //x scale
+          x = d3.scale.linear()
+            .domain([55300000, newDatum.value])
+            .range([margin.left, width + margin.right]);
+
+          //area scale
+          a_scale = d3.scale.sqrt()
+            .domain([35200000, newDatum.value])
+            .range([15, 60]);
+
+          xAxis = d3.svg.axis()
+            .scale(x)
+
+          svg.select(".axis")
+            .transition()
+            .duration(1000)
+            .call(xAxis)
+
+          nodes = dataset.map(function (node, index) {
+            return {
+              idealradius: a_scale(node.originalPrice),
+              radius: 0,
+              // Give each node a random color.
+              color: '#ff7f0e',
+              // Set the node's gravitational centerpoint.
+              idealcx: x(+node.value),
+              idealcy: height / 2,
+              x: x(+node.value),
+              // Add some randomization to the placement;
+              // nodes stacked on the same point can produce NaN errors.
+              y: height / 2 + Math.random(),
+              image: node.image,
+              painting: node.painting,
+              id: node.id,
+              adjustedPrice: node.adjustedPrice,
+              artist: node.artist,
+              yearOfPainting: node.yearOfPainting,
+              rankAtSale: node.rankAtSale
+            };
+          });
+
+
+          force.start();
+          for (var i = 100; i > 0; --i) force.tick();
+          force.stop();
+
+          defs.selectAll(".artist-pattern")
+            .data(nodes)
+            .enter().append('pattern')
+            .attr("class", "artist-pattern")
+            .attr("id", (d) => {
+              return d.id
+            })
+            .attr("height", "100%")
+            .attr("width", "100%")
+            .attr("patternContentUnits", "objectBoundingBox")
+            .append("image")
+            .attr("height", "1")
+            .attr("width", "1")
+            .attr("preserveAspectRatio", "none")
+            .attr("xmlns:xlink", "")
+            .attr("xmlns:xlink", "")
+            .attr("xlink:href", (d) => {
+              return d.image
+            })
+
+          let circles = svg.selectAll('circle').data(nodes)
+
+          circles.enter()
+            .append('circle')
+            .style("fill", function (d) { return `url(#${d.id})`; })
+            .attr("cx", function (d) { return d.x })
+            .attr("cy", function (d) { return d.y })
+            .attr("r", function (d) { return d.radius })
+            .on('mouseover', tip.show)
+            .on('mouseout', tip.hide)
+
+          svg.selectAll('circle')
+            .transition()
+            .duration(1000)
+            .style("fill", function (d) { return `url(#${d.id})`; })
+            .attr("cx", function (d) { return d.x })
+            .attr("cy", function (d) { return d.y })
+            .attr("r", function (d) { return d.radius })
+            .on('mouseover', tip.show)
+            .on('mouseout', tip.hide)
+
+
+
+        })
+
+        d3.select(".remove").on("click", () => {
+          //add new data
+          let poppedData = dataset.pop()
+          newData.unshift(poppedData)
+
+          //update scales
+          //x scale
+          x = d3.scale.linear()
+            .domain([55300000, dataset[dataset.length - 1].value])
+            .range([margin.left, width + margin.right]);
+
+          //area scale
+          a_scale = d3.scale.sqrt()
+            .domain([35200000, dataset[dataset.length - 1].value])
+            .range([15, 60]);
+
+          xAxis = d3.svg.axis()
+            .scale(x)
+
+          svg.select(".axis")
+            .transition()
+            .duration(1000)
+            .call(xAxis)
+
+          nodes = dataset.map(function (node, index) {
+            return {
+              idealradius: a_scale(node.originalPrice),
+              radius: 0,
+              // Give each node a random color.
+              color: '#ff7f0e',
+              // Set the node's gravitational centerpoint.
+              idealcx: x(+node.value),
+              idealcy: height / 2,
+              x: x(+node.value),
+              // Add some randomization to the placement;
+              // nodes stacked on the same point can produce NaN errors.
+              y: height / 2 + Math.random(),
+              image: node.image,
+              painting: node.painting,
+              id: node.id,
+              adjustedPrice: node.adjustedPrice,
+              artist: node.artist,
+              yearOfPainting: node.yearOfPainting,
+              rankAtSale: node.rankAtSale
+            };
+          });
+
+
+          force.start();
+          for (var i = 100; i > 0; --i) force.tick();
+          force.stop();
+
+          defs.selectAll(".artist-pattern")
+            .data(nodes)
+            .enter().append('pattern')
+            .attr("class", "artist-pattern")
+            .attr("id", (d) => {
+              return d.id
+            })
+            .attr("height", "100%")
+            .attr("width", "100%")
+            .attr("patternContentUnits", "objectBoundingBox")
+            .append("image")
+            .attr("height", "1")
+            .attr("width", "1")
+            .attr("preserveAspectRatio", "none")
+            .attr("xmlns:xlink", "")
+            .attr("xmlns:xlink", "")
+            .attr("xlink:href", (d) => {
+              return d.image
+            })
+
+          let circles = svg.selectAll('circle').data(nodes)
+
+          circles.exit()
+            .remove()
+
+
+          svg.selectAll('circle')
+            .transition()
+            .duration(1000)
+            .style("fill", function (d) { return `url(#${d.id})`; })
+            .attr("cx", function (d) { return d.x })
+            .attr("cy", function (d) { return d.y })
+            .attr("r", function (d) { return d.radius })
+            .on('mouseover', tip.show)
+            .on('mouseout', tip.hide)
+
+
+
+        })
+
+        d3.select(".picasso").on("click", () => {
+          svg.selectAll("circle")
+            .attr("opacity", "1")
+            .on('mouseover', tip.show)
+            .filter(function (d) { return d.artist !== 'Pablo Picasso' })
+            .on('mouseover', tip.hide)
+            .transition()
+            .duration(1000)
+            .attr("opacity", "0.33")
+
+        })
+
+        d3.select(".rothko").on("click", () => {
+          svg.selectAll("circle")
+            .attr("opacity", "1")
+            .on('mouseover', tip.show)
+            .filter(function (d) { return d.artist !== 'Mark Rothko' })
+            .on('mouseover', tip.hide)
+            .transition()
+            .duration(1000)
+            .attr("opacity", "0.33")
+
+        })
+
+        d3.select(".vanGogh").on("click", () => {
+          svg.selectAll("circle")
+            .attr("opacity", "1")
+            .on('mouseover', tip.show)
+            .filter(function (d) { return d.artist !== 'Vincent van Gogh' })
+            .on('mouseover', tip.hide)
+            .transition()
+            .duration(1000)
+            .attr("opacity", "0.33")
+
+        })
+
+        d3.select(".all").on("click", () => {
+          svg.selectAll("circle")
+            .on('mouseover', tip.show)
+            .transition()
+            .duration(1000)
+            .attr("opacity", "1")
+
+        })
+
+        d3.select(".before1900").on("click", () => {
+          svg.selectAll("circle")
+            .attr("opacity", "1")
+            .on('mouseover', tip.show)
+            .filter(function (d) { return d.yearOfPainting > 1900 })
+            .on('mouseover', tip.hide)
+            .transition()
+            .duration(1000)
+            .attr("opacity", "0.33")
+
+        })
+
+        d3.select(".after1900").on("click", () => {
+          svg.selectAll("circle")
+            .attr("opacity", "1")
+            .on('mouseover', tip.show)
+            .filter(function (d) { return d.yearOfPainting < 1900 })
+            .on('mouseover', tip.hide)
+            .transition()
+            .duration(1000)
+            .attr("opacity", "0.33")
+
+        })
+
+        d3.select(".rank").on("click", () => {
+
+          //update scales
+          //x scale
+          x = d3.scale.linear()
+            .domain([1, 54])
+            .range([margin.left, width + margin.right]);
+
+          //area scale
+          a_scale = d3.scale.sqrt()
+            .domain([35200000, dataset[dataset.length - 1].value])
+            .range([15, 60]);
+
+          xAxis = d3.svg.axis()
+            .scale(x)
+
+          svg.select(".axis")
+            .transition()
+            .duration(1000)
+            .call(xAxis)
+
+          nodes = dataset.map(function (node, index) {
+            return {
+              idealradius: a_scale(node.originalPrice),
+              radius: 0,
+              // Give each node a random color.
+              color: '#ff7f0e',
+              // Set the node's gravitational centerpoint.
+              idealcx: x(+node.value),
+              idealcy: height / 2,
+              x: x(+node.value),
+              // Add some randomization to the placement;
+              // nodes stacked on the same point can produce NaN errors.
+              y: height / 2 + Math.random(),
+              image: node.image,
+              painting: node.painting,
+              id: node.id,
+              adjustedPrice: node.adjustedPrice,
+              artist: node.artist,
+              yearOfPainting: node.yearOfPainting,
+              rankAtSale: node.rankAtSale
+            };
+          });
+
+
+          force.start();
+          for (var i = 100; i > 0; --i) force.tick();
+          force.stop();
+
+          defs.selectAll(".artist-pattern")
+            .data(nodes)
+            .enter().append('pattern')
+            .attr("class", "artist-pattern")
+            .attr("id", (d) => {
+              return d.id
+            })
+            .attr("height", "100%")
+            .attr("width", "100%")
+            .attr("patternContentUnits", "objectBoundingBox")
+            .append("image")
+            .attr("height", "1")
+            .attr("width", "1")
+            .attr("preserveAspectRatio", "none")
+            .attr("xmlns:xlink", "")
+            .attr("xmlns:xlink", "")
+            .attr("xlink:href", (d) => {
+              return d.image
+            })
+
+          let circles = svg.selectAll('circle').data(nodes)
+
+
+          svg.selectAll('circle')
+            .style("fill", function (d) { return `url(#${d.id})`; })
+            .attr("cx", function (d) { return d.x })
+            .attr("cy", function (d) { return d.y })
+            .attr("r", function (d) { return d.radius })
+            .on('mouseover', tip.show)
+            .on('mouseout', tip.hide)
+
+
+
+        })
+
+
+
+
+        loading.remove();
+      }
+      // Use a timeout to allow the rest of the page to load first.
+      setTimeout(renderGraph, 10);
+
+    }
+
+  </script>
+  <div class="button-group">
+      <button class="add">Add Outliers</button>
+      <button class="remove">Remove Outliers</button>
+      <button class="picasso">Picasso</button>
+      <button class="rothko">Rothko</button>
+      <button class="vanGogh">Van Gogh</button>
+      <button class="before1900">Before 1900</button>
+      <button class="after1900">After 1900</button>
+     
+
+      <button class="all">Show All</button>
+  </div>
